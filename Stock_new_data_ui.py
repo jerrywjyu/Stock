@@ -176,7 +176,6 @@ with col5:
     cond_ma_bull = st.checkbox("MA5 > MA20 > MA60 多頭排列", value=False)
 
 
-
 # 啟動查詢按鈕
 if st.button('開始查詢股票資訊'):
     for stock_id in stock_id_list:
