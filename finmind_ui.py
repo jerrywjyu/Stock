@@ -160,7 +160,7 @@ def plot_backtest_chart(df, stock_id, stock_name):
     return fig
 
 @st.cache_data
-def run_backtest(stock_id: str, period_days: int, holding_days: int, use_golden_cross: bool, use_kd_range: bool, use_bb_mid: bool):
+def run_backtest(stock_id: str, period_days: int, holding_days: int, use_golden_cross: bool, use_kd_range: bool, use_bb_mid: bool, use_bb_width: bool, use_rsi_range: bool, use_vol_ma: bool):
     """
     執行量化回測
     """
@@ -216,6 +216,11 @@ def run_backtest(stock_id: str, period_days: int, holding_days: int, use_golden_
         df['BBU'] = bb.bollinger_hband()
         df['BBL'] = bb.bollinger_lband()
         
+        # 新增指標計算
+        df['BB_Width'] = (df['BBU'] - df['BBL']) / df['BBM'] * 100
+        df['RSI'] = ta.momentum.rsi(df['Close'], n=14)
+        df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
+
         df = df.dropna()
         if df.empty:
             return {"error": "計算技術指標後沒有足夠數據。"}
@@ -241,6 +246,15 @@ def run_backtest(stock_id: str, period_days: int, holding_days: int, use_golden_
             price_near_bb_mid = (df['Close'] >= df[bbm_col] * 0.99) & (df['Close'] <= df[bbm_col] * 1.01)
             conditions &= price_near_bb_mid
             
+        if use_bb_width:
+            conditions &= (df['BB_Width'] < 10)
+            
+        if use_rsi_range:
+            conditions &= (df['RSI'] >= 50) & (df['RSI'] <= 60)
+            
+        if use_vol_ma:
+            conditions &= (df['Volume'] > df['Vol_MA5'])
+
         df['buy_signal'] = conditions
 
         buy_dates = df[df['buy_signal']].index
@@ -273,7 +287,7 @@ def run_backtest(stock_id: str, period_days: int, holding_days: int, use_golden_
         return {"error": f"回測時发生錯誤：{e}"}
 
 # --- UI Layout ---
-tab1, tab2 = st.tabs(["📊 技術指標查詢", "📈 策略量化回測"])
+tab1, tab2, tab3 = st.tabs(["📊 技術指標查詢", "📈 策略量化回測", "🔍 選股條件搜尋"])
 
 with tab1:
     st.header("FinMind 股票技術指標查詢")
@@ -328,9 +342,12 @@ with tab2:
     st.header("策略量化回測")
     st.write("請勾選回測條件（多選為 AND 條件）：")
     
-    use_golden_cross = st.checkbox("KD 指標黃金交叉 (當日 K > D, 昨日 K < D)", value=True)
-    use_kd_range = st.checkbox("K 值與 D 值皆介於 40 至 50 之間", value=True)
-    use_bb_mid = st.checkbox("當日收盤價在布林通道中線 (20MA) 的 ±1% 範圍內", value=True)
+    use_golden_cross = st.checkbox("KD 指標黃金交叉 (當日 K > D, 昨日 K < D)", value=False)
+    use_kd_range = st.checkbox("K 值與 D 值皆介於 40 至 50 之間", value=False)
+    use_bb_mid = st.checkbox("當日收盤價在布林通道中線 (20MA) 的 ±1% 範圍內", value=False)
+    use_bb_width = st.checkbox("BBand 寬度 % < 10 (代表盤整壓縮)", value=False)
+    use_rsi_range = st.checkbox("RSI 介於 50 至 60 之間 (代表強勢起漲)", value=False)
+    use_vol_ma = st.checkbox("成交量 > 5 日均量 (代表量增)", value=False)
 
     backtest_stock_input = st.text_input("輸入要回測的股票代號或名稱", value="2330", key="backtest_stock_input")
     
@@ -361,7 +378,7 @@ with tab2:
             
             with st.spinner(f"正在對 {display_label} 進行回測..."):
                 period_days = period_mapping[period_option]
-                backtest_results = run_backtest(code, period_days, holding_days, use_golden_cross, use_kd_range, use_bb_mid)
+                backtest_results = run_backtest(code, period_days, holding_days, use_golden_cross, use_kd_range, use_bb_mid, use_bb_width, use_rsi_range, use_vol_ma)
 
                 if "error" in backtest_results:
                     st.error(backtest_results["error"])
@@ -384,3 +401,131 @@ with tab2:
                     if not df_chart.empty:
                         fig = plot_backtest_chart(df_chart, code, stock_name)
                         st.plotly_chart(fig, use_container_width=True)
+
+with tab3:
+    st.header("選股條件搜尋")
+
+    # 獲取股票清單以提取產業別
+    try:
+        df_all_stocks = fetch_twse_stock_list()
+        # 過濾掉權證與非 4 位數代碼的標的
+        df_all_stocks = df_all_stocks[df_all_stocks['證券代號'].str.len() == 4]
+        all_industries = sorted(df_all_stocks['產業別'].dropna().unique().tolist())
+    except Exception as e:
+        st.error(f"無法獲取股票清單：{e}")
+        df_all_stocks = pd.DataFrame()
+        all_industries = []
+
+    st.write("請設定搜尋條件：")
+    selected_industries = st.multiselect("篩選產業別 (不選則搜尋全部上市股票)", all_industries)
+
+    st.subheader("指標過濾條件 (多選為 AND 條件)")
+    
+    # 分組 1: 價格與趨勢
+    with st.container(border=True):
+        st.write("**📈 價格與趨勢**")
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            s_price_limit = st.checkbox("1. 股價低於設定值", value=False)
+            s_above_ma5 = st.checkbox("2. 股價在 5 日線之上", value=False)
+            s_above_bb_mid = st.checkbox("3. 股價在 BBand 中線之上", value=False)
+            s_bb_width_limit = st.checkbox("4. BBand 寬度 % <= 設定值", value=False)
+        with col2:
+            price_val = st.number_input("股價上限", value=80.0, step=1.0, key="p_val")
+            st.write("") # 佔位對齊
+            st.write("")
+            bb_width_val = st.number_input("布林寬度上限", value=10.0, step=0.5, key="bbw_val")
+
+    # 分組 2: 技術指標
+    with st.container(border=True):
+        st.write("**📊 技術指標 (RSI / KD)**")
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            s_rsi_range = st.checkbox("5. RSI 介於設定區間", value=False)
+            s_kd_limit = st.checkbox("6. KD 值皆大於設定值", value=False)
+            s_k_above_d = st.checkbox("7. K > D (黃金交叉狀態)", value=False)
+        with col2:
+            rsi_min = st.number_input("RSI 下限", value=50.0, step=1.0, key="rsi_min")
+            kd_val = st.number_input("KD 門檻值", value=30.0, step=1.0, key="kd_val")
+        with col3:
+            rsi_max = st.number_input("RSI 上限", value=60.0, step=1.0, key="rsi_max")
+
+    # 分組 3: 成交量與動能
+    with st.container(border=True):
+        st.write("**🔊 成交量與動能 (ADX / DI)**")
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            s_vol_ma = st.checkbox("8. 成交量 > 5 日均量", value=False)
+            s_di_cross = st.checkbox("9. +DI > -DI", value=False)
+            s_adx_limit = st.checkbox("10. ADX > 設定值", value=False)
+        with col2:
+            st.write("") # 佔位
+            st.write("")
+            adx_val = st.number_input("ADX 門檻值", value=20.0, step=1.0, key="adx_val")
+
+    if st.button("🚀 開始搜尋符合條件的股票", key="scanner_button"):
+        if df_all_stocks.empty:
+            st.error("股票清單為空，無法搜尋。")
+        else:
+            df_stocks = df_all_stocks.copy()
+            if selected_industries:
+                df_stocks = df_stocks[df_stocks['產業別'].isin(selected_industries)]
+            
+            results_found = []
+            total_stocks = len(df_stocks)
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, (idx, row) in enumerate(df_stocks.iterrows()):
+                sid = row['證券代號']
+                sname = row['證券名稱']
+                
+                # 更新進度條
+                progress = (i + 1) / total_stocks
+                progress_bar.progress(progress)
+                status_text.text(f"正在掃描 ({i+1}/{total_stocks}): {sid} {sname}")
+                
+                # 獲取指標數據
+                stock_data = get_finmind_indicators(sid)
+                if not isinstance(stock_data, dict):
+                    continue
+                
+                # 條件比對邏輯
+                match = True
+                if s_price_limit and not (stock_data.get("今日股價", 0) < price_val): match = False
+                if s_above_ma5 and not (stock_data.get("今日股價", 0) > stock_data.get("MA5", 0)): match = False
+                if s_above_bb_mid and not (stock_data.get("今日股價", 0) > stock_data.get("BBand 中軌 (20MA)", 0)): match = False
+                if s_bb_width_limit and not (stock_data.get("BBand 寬度 (%)", 100) <= bb_width_val): match = False
+                if s_rsi_range and not (rsi_min < stock_data.get("RSI (14)", 0) < rsi_max): match = False
+                if s_kd_limit and not (stock_data.get("K值(9, 3)-校正後", 0) > kd_val and stock_data.get("D值(9, 3)-校正後", 0) > kd_val): match = False
+                if s_k_above_d and not (stock_data.get("K值(9, 3)-校正後", 0) > stock_data.get("D值(9, 3)-校正後", 0)): match = False
+                if s_vol_ma and not (stock_data.get("今日成交量 (張)", 0) > stock_data.get("5 日均量 (張)", 0)): match = False
+                if s_di_cross and not (stock_data.get("+DI", 0) > stock_data.get("-DI", 0)): match = False
+                if s_adx_limit and not (stock_data.get("ADX", 0) > adx_val): match = False
+                
+                if match:
+                    results_found.append({
+                        "代號": sid,
+                        "名稱": sname,
+                        "產業別": row['產業別'],
+                        "現價": stock_data.get("今日股價"),
+                        "RSI(14)": stock_data.get("RSI (14)"),
+                        "ADX": stock_data.get("ADX"),
+                        "成交量(張)": stock_data.get("今日成交量 (張)"),
+                        "5日均量": stock_data.get("5 日均量 (張)")
+                    })
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            if results_found:
+                st.success(f"搜尋完成！共找到 {len(results_found)} 檔符合條件的股票。")
+                res_df = pd.DataFrame(results_found)
+                st.dataframe(res_df, use_container_width=True)
+                
+                # 提供 CSV 下載
+                csv = res_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                st.download_button("📥 下載搜尋結果 CSV", data=csv, file_name=f"stock_scan_{datetime.date.today()}.csv", mime="text/csv")
+            else:
+                st.info("搜尋完成，目前沒有符合所有勾選條件的股票。")

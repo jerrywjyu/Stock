@@ -88,6 +88,7 @@ def get_finmind_indicators(stock_id):
     df['D'] = kd.stoch_signal()
     
     # --- 計算台股版 KD (9,3,3) - 校正後 ---
+    df['MA5'] = ta.trend.sma_indicator(df['Close'], n=5)
     # 1. 計算 RSV
     df['9_high'] = df['High'].rolling(9).max()
     df['9_low'] = df['Low'].rolling(9).min()
@@ -140,6 +141,7 @@ def get_finmind_indicators(stock_id):
         "股票代號": stock_id,
         "股票名稱": stock_name,
         "今日股價": round(latest['Close'], 2),
+        "MA5": round(latest['MA5'], 2) if not pd.isna(latest['MA5']) else 0,
         "BBand 中軌 (20MA)": round(latest['BBM'], 2),
         "BBand 上限": round(latest['BBU'], 2),
         "BBand 下限": round(latest['BBL'], 2),

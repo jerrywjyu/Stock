@@ -12,8 +12,18 @@ def configure_gemini():
     try:
         # It's best practice to use environment variables for API keys.
         api_key = os.environ.get("GOOGLE_API_KEY")
+
+        # 如果環境變數不存在，嘗試從 Streamlit secrets 讀取 (適合本地開發與部署)
         if not api_key:
-            api_key = "AIzaSyC6KXeQ5O7uoMzffYrV7t4Xpw6oWWly68s"
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("GOOGLE_API_KEY")
+            except Exception:
+                pass
+
+        # 如果上述方式都沒找到金鑰，使用您提供的新金鑰作為備援
+        if not api_key:
+            api_key = "AIzaSyDzUIxXnAPAgQ4aiA06ZT1JOsiRX7bU4oY"
 
         if api_key and genai:
             genai.configure(api_key=api_key)
@@ -90,8 +100,8 @@ def get_ai_analysis(stock_data):
 
     prompt = format_data_for_prompt(stock_data)
     
-    # 根據您的帳號可用模型更新順序，優先嘗試 2.5 系列以避開 2.0 的配額限制
-    candidate_models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
+    # 根據系統偵測到的可用模型更新清單
+    candidate_models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-exp', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
     error_log = []
 
     for model_name in candidate_models:
