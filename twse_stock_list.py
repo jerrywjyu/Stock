@@ -12,7 +12,7 @@ def fetch_twse_stock_list(cache_file='twse_stock_list.csv'):
     # 下載台灣證交所上市公司清單（含產業類別）
     url = 'https://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
     headers = {'User-Agent': 'Mozilla/5.0'}
-    res = requests.get(url, headers=headers)
+    res = requests.get(url, headers=headers, timeout=15)
     res.encoding = 'big5'
     tables = pd.read_html(StringIO(res.text))
     df = tables[0]

@@ -1,7 +1,9 @@
 import pandas as pd
 import ta
 from FinMind.data import DataLoader
+import time # Import time for potential delay
 from twse_stock_list import fetch_twse_stock_list
+import datetime # Import datetime for date calculations
 
 def search_stock(query):
     """
@@ -32,24 +34,45 @@ def search_stock(query):
             print(f"  {row['證券代號']} - {row['證券名稱']}")
         return None
 
-def get_finmind_indicators(stock_id):
+def get_finmind_indicators(stock_id, stock_name=None, token=None):
     """
     使用 FinMind 抓取台股數據並計算 BBand, RSI, KD, ADX, 成交量等指標
     """
     # 1. 初始化 FinMind 載入器
     dl = DataLoader()
-    
-    # 2. 抓取歷史資料 (建議抓取 100 天，確保長週期指標如 ADX 計算準確)
-    # 起始日期設定在約三個月前
-    start_date = (pd.Timestamp.now() - pd.Timedelta(days=180)).strftime('%Y-%m-%d')
-    
-    df = dl.taiwan_stock_daily(
-        stock_id=stock_id,
-        start_date=start_date
-    )
+    if token:
+        print(f"DEBUG: Logging into FinMind with provided token for {stock_id}.")
+        dl.login_by_token(api_token=token)
+    else:
+        print(f"DEBUG: Attempting FinMind data retrieval for {stock_id} without token (free tier).")
 
-    if df.empty:
-        return "找不到該股票資料，請檢查代號是否正確。"
+    # 2. 抓取歷史資料 (建議抓取 180 天，確保長週期指標如 ADX 計算準確)
+    end_date_str = datetime.date.today().strftime('%Y-%m-%d')
+    start_date_str = (datetime.date.today() - datetime.timedelta(days=180)).strftime('%Y-%m-%d')
+    
+    # Using a try-except block to gracefully handle potential API or network errors
+    try:
+        df = dl.taiwan_stock_daily(
+            stock_id=stock_id,
+            start_date=start_date_str,
+            end_date=end_date_str
+        )
+    except KeyError as e:
+        if 'data' in str(e):
+            return "從 FinMind API 獲取資料時發生錯誤：API 回應中缺少 'data' 欄位。這通常表示 Token 已失效、無效或額度用完。請檢查您的 Token。"
+        else:
+            return f"從 FinMind API 獲取資料時發生鍵值錯誤 (KeyError): {str(e)}"
+    except Exception as e:
+        return f"從 FinMind API 獲取資料時發生未知錯誤: {str(e)}"
+
+    if df is None or df.empty or 'close' not in df.columns.str.lower():
+        if token:
+            return "無法獲取資料。請檢查股票代號是否正確，或您的 Token 是否有效/尚有額度。"
+        else:
+            return "找不到該股票資料，請檢查代號是否正確 (或可於側邊欄提供 FinMind Token 以取得更高查詢率)。"
+    
+    if len(df) < 30:
+        return f"資料量不足 ({len(df)} 筆)，無法計算技術指標。"
 
     # 3. 資料欄位標準化 - FinMind 欄位: date, open, max, min, close, Trading_Volume
     df.columns = df.columns.str.lower()  # 轉為小寫以標準化
@@ -67,6 +90,12 @@ def get_finmind_indicators(stock_id):
         if old_name in df.columns:
             df[new_name] = df[old_name]
     
+    # 確保數值欄位為數字型態 (處理可能的字串或異常值)
+    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # 將日期設為索引
     if 'date' in df.columns:
         df.index = pd.to_datetime(df['date'])
@@ -89,6 +118,7 @@ def get_finmind_indicators(stock_id):
     
     # --- 計算台股版 KD (9,3,3) - 校正後 ---
     df['MA5'] = ta.trend.sma_indicator(df['Close'], n=5)
+    df['MA10'] = ta.trend.sma_indicator(df['Close'], n=10)
     # 1. 計算 RSV
     df['9_high'] = df['High'].rolling(9).max()
     df['9_low'] = df['Low'].rolling(9).min()
@@ -120,15 +150,18 @@ def get_finmind_indicators(stock_id):
     df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
     df['Volume_Lots'] = df['Volume'] / 1000  # 轉為張數
     df['Vol_MA5_Lots'] = df['Vol_MA5'] / 1000
+    # 判斷過去 10 日是否觸及下軌 (增加回測成功率，5日通常太短)
+    df['Touched_Lower_10D'] = (df['Low'] <= df['BBL']).rolling(window=10).max().fillna(0).astype(bool)
 
     # 5. 提取最新一日與前一日數據
     latest = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # 取得股票中文名稱
-    df_stocks = fetch_twse_stock_list()
-    stock_name_series = df_stocks[df_stocks['證券代號'] == stock_id]['證券名稱']
-    stock_name = stock_name_series.iloc[0] if not stock_name_series.empty else stock_id
+    # 如果外部沒傳入名稱，才去讀取檔案 (避免多執行緒衝突)
+    if stock_name is None:
+        df_stocks = fetch_twse_stock_list()
+        stock_name_series = df_stocks[df_stocks['證券代號'] == stock_id]['證券名稱']
+        stock_name = stock_name_series.iloc[0] if not stock_name_series.empty else stock_id
 
     def safe_int(val):
         """安全轉換為整數，處理 NaN"""
@@ -142,21 +175,32 @@ def get_finmind_indicators(stock_id):
         "股票名稱": stock_name,
         "今日股價": round(latest['Close'], 2),
         "MA5": round(latest['MA5'], 2) if not pd.isna(latest['MA5']) else 0,
+        "MA10": round(latest['MA10'], 2) if not pd.isna(latest['MA10']) else 0,
+        "MA20": round(latest['BBM'], 2) if not pd.isna(latest['BBM']) else 0,
         "BBand 中軌 (20MA)": round(latest['BBM'], 2),
+        "昨日 BBand 中軌": round(prev['BBM'], 2),
+        "昨日收盤價": round(prev['Close'], 2),
         "BBand 上限": round(latest['BBU'], 2),
         "BBand 下限": round(latest['BBL'], 2),
         "BBand 寬度 (%)": round(latest['BB_Width'], 2),
+        "昨日 BBand 寬度": round(prev['BB_Width'], 2),
         "RSI (6)": round(latest['RSI_6'], 2),
         "RSI (14)": round(latest['RSI_14'], 2),
+        "昨日 RSI (14)": round(prev['RSI_14'], 2),
         "K值(9, 3)-校正後": round(latest['K_Corrected'], 2),
         "D值(9, 3)-校正後": round(latest['D_Corrected'], 2),
+        "昨日 K值": round(prev['K_Corrected'], 2),
+        "昨日 D值": round(prev['D_Corrected'], 2),
         "ADX": round(latest['ADX'], 2),
+        "昨日 ADX": round(prev['ADX'], 2),
         "+DI": round(latest['DI+'], 2),
         "-DI": round(latest['DI-'], 2),
         "前一日成交量 (張)": safe_int(prev['Volume_Lots']),
         "今日成交量 (張)": safe_int(latest['Volume_Lots']),
-        "5 日均量 (張)": safe_int(latest['Vol_MA5_Lots'])
+        "5 日均量 (張)": safe_int(latest['Vol_MA5_Lots']),
+        "十日內曾觸及下軌": latest['Touched_Lower_10D']
     }
+
     # --- 判斷項目: 計算 7 項條件與分數 ---
     def to_float(x, default=0.0):
         try:
