@@ -12,6 +12,7 @@ from data_storage import save_analysis_to_csv, load_analysis_history
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import ta
+from data_storage import ANALYSIS_FILE, LOG_FILE # Import constants
 from twse_stock_list import fetch_twse_stock_list
 
 
@@ -494,8 +495,8 @@ if st.sidebar.button("🔄 重新整理 Token 狀態"):
     st.rerun() # 重新執行腳本以更新狀態
 
 # --- UI Layout ---
-# Use a radio button as a stateful tab controller to prevent switching back on rerun
-tab_options = ["📊 技術指標查詢", "📈 策略量化回測", "🔍 選股條件搜尋", "❤️ 我的自選股", "📜 歷史分析紀錄"]
+# Use a radio button as a stateful tab controller to prevent switching back on rerun. Update tab title.
+tab_options = ["📊 技術指標查詢", "📈 策略量化回測", "🔍 選股條件搜尋", "❤️ 我的自選股", "📜 歷史分析紀錄 (V2)"]
 selected_tab = st.radio("選擇功能", tab_options, horizontal=True, label_visibility="collapsed")
 
 if selected_tab == "📊 技術指標查詢":

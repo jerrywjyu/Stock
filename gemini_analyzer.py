@@ -1,6 +1,6 @@
 import os
 try:
-    import google.genai as genai
+    import google.generativeai as genai
 except ImportError:
     genai = None
 
@@ -150,6 +150,7 @@ def format_data_for_prompt(stock_data):
 def get_ai_analysis(stock_data):
     """
     Sends stock data to Gemini AI and returns the analysis.
+    It tries a list of models in order until one succeeds.
     """
     if genai is None:
         return "錯誤：未安裝 `google-genai` 套件。請在終端機執行 `pip install google-genai`。"
@@ -159,23 +160,38 @@ def get_ai_analysis(stock_data):
 
     prompt = format_data_for_prompt(stock_data)
     
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        # 嘗試列出可用模型以協助除錯
-        available_msg = ""
+    # List of models to try in order
+    models_to_try = [
+        'gemini-flash-latest',
+        'gemini-pro-latest',
+        'gemini-2.5-flash'
+    ]
+    
+    last_error = None
+    
+    for model_name in models_to_try:
         try:
-            all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            available_msg = f"\n\n系統偵測到的可用模型: {', '.join(all_models)}"
-        except Exception as list_e:
-            available_msg = f"\n\n無法列出模型 (API Key 可能無效或未啟用 API 服務): {list_e}"
+            print(f"🔄 正在嘗試使用模型: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            print(f"✅ 成功使用模型: {model_name}")
+            return response.text
+        except Exception as e:
+            print(f"⚠️ 模型 {model_name} 失敗: {e}")
+            last_error = e
+            continue # Try the next model
+            
+    # If all models failed, return a comprehensive error message
+    available_msg = ""
+    try:
+        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        available_msg = f"\n\n系統偵測到的可用模型: {', '.join(all_models)}"
+    except Exception as list_e:
+        available_msg = f"\n\n無法列出模型 (API Key 可能無效或未啟用 API 服務): {list_e}"
 
-        # 若全部失敗，回傳詳細錯誤資訊
-        return (
-            f"呼叫 Gemini API 失敗。\n"
-            f"已嘗試模型: gemini-1.5-flash-latest\n"
-            f"錯誤詳情: {e}" +
-            available_msg
-        )
+    return (
+        f"呼叫 Gemini API 失敗。所有備用模型均無法使用。\n"
+        f"已嘗試模型: {', '.join(models_to_try)}\n"
+        f"最後一個錯誤詳情: {last_error}" +
+        available_msg
+    )
